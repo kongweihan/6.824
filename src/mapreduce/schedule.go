@@ -1,6 +1,9 @@
 package mapreduce
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 //
 // schedule() starts and waits for all tasks in the given phase (mapPhase
@@ -30,5 +33,36 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	//
 	// Your code here (Part III, Part IV).
 	//
+	var wg sync.WaitGroup
+	wg.Add(ntasks)
+
+	for i := 0; i < ntasks; i++ {
+		if phase == mapPhase {
+			args := DoTaskArgs{JobName: jobName, File: mapFiles[i], Phase: mapPhase, TaskNumber: i, NumOtherPhase: n_other}
+			go assignTask(registerChan, args, &wg)
+		} else {
+			args := DoTaskArgs{JobName: jobName, File: "", Phase: reducePhase, TaskNumber: i, NumOtherPhase: n_other}
+			go assignTask(registerChan, args, &wg)
+		}
+
+	}
+	fmt.Printf("Schedule: %v waiting for all tasks to finish\n", phase)
+	wg.Wait()
 	fmt.Printf("Schedule: %v done\n", phase)
+}
+
+func assignTask(workers chan string, args DoTaskArgs, wg *sync.WaitGroup) {
+	for {
+		debug("Schedule: %v #%v waiting for worker\n", args.Phase, args.TaskNumber)
+		worker := <- workers
+		debug("Schedule: %v #%v assigned to worker %v\n", args.Phase, args.TaskNumber, worker)
+		if call(worker, "Worker.DoTask", args, nil) {
+			debug("Schedule: %v #%v done, calling waitGroup Done()\n", args.Phase, args.TaskNumber)
+			wg.Done()
+			debug("Schedule: worker back in queue %v\n", worker)
+			workers <- worker
+			break
+		}
+		debug("Schedule: %v #%v failed, worker no reply %v\n", args.Phase, args.TaskNumber, worker)
+	}
 }
