@@ -483,7 +483,9 @@ type AppendEntriesArgs struct {
 
 type AppendEntriesReply struct {
 	Term int
-	Success bool
+	Success bool  // if false, either follower has newer term, or has conflict term, use ConflictTerm and FirstIndex
+	ConflictTerm int  // conflict term of the follower, -1 means the entry at PrevLogIndex doesn't exist in follower's log
+	FirstIndex int  // first index of the conflict term of the follower
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -491,7 +493,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
-		reply.Success = false
+		reply.Success = false  // not necessary
 		rf.debug("AppendEntries reject old term from server %v\n", args.LeaderId)
 	} else {
 		rf.becomeFollower(args.Term)
@@ -500,11 +502,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 		if rf.lastLogIndex() < args.PrevLogIndex {
 			reply.Success = false
+			reply.ConflictTerm = -1
+			reply.FirstIndex = rf.lastLogIndex() + 1
 		} else {
 			if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 				rf.debug("AppendEntries ack Leader:%v, log inconsistent index:%v term:%v leader term:%v  lastLogIndex:%v\n", args.LeaderId, args.PrevLogIndex, rf.log[args.PrevLogIndex].Term, args.PrevLogTerm, rf.lastLogIndex())
-				rf.log = rf.log[:args.PrevLogIndex]
 				reply.Success = false
+				reply.ConflictTerm = rf.log[args.PrevLogIndex].Term
+				reply.FirstIndex = rf.findFirstIndex(reply.ConflictTerm)
+				rf.log = rf.log[:args.PrevLogIndex]  // truncate known invalid entries (with conflict term)
 			} else {
 				rf.debug("AppendEntries ack Leader:%v, log ok up to %v  lastLogIndex:%v  append entries:%v\n", args.LeaderId, args.PrevLogIndex, rf.lastLogIndex(), args.Entries)
 				rf.log = rf.log[:args.PrevLogIndex + 1]
@@ -557,7 +563,13 @@ func (rf *Raft) sendAppendEntries(server int) {
 						rf.updateCommitIndex()  // only need to update commitIndex if matchIndex changed
 					}
 				} else {
-					rf.nextIndex[server]--
+					if reply.ConflictTerm == -1 {
+						rf.nextIndex[server] = reply.FirstIndex
+					} else if last := rf.findLastIndex(reply.ConflictTerm); last != -1 {
+						rf.nextIndex[server] = last + 1
+					} else {
+						rf.nextIndex[server] = reply.FirstIndex
+					}
 					go rf.sendAppendEntries(server)
 				}
 			}
@@ -565,6 +577,29 @@ func (rf *Raft) sendAppendEntries(server int) {
 
 		rf.mu.Unlock()
 	}
+}
+
+// Assume holding the lock of rf.mu
+func (rf *Raft) findFirstIndex(term int) int {
+	lastIndex := rf.findLastIndex(term)
+	for i := lastIndex; i >= 0; i-- {
+		if rf.log[i].Term < term {
+			return i + 1
+		}
+	}
+	panic("findFirstIndex should never take a non-exist term")
+}
+
+// Assume holding the lock of rf.mu
+func (rf *Raft) findLastIndex(term int) int {
+	for i := rf.lastLogIndex(); i >= 0; i-- {
+		if rf.log[i].Term < term {
+			return -1
+		} else if rf.log[i].Term == term {
+			return i
+		}
+	}
+	return -1
 }
 
 // Assume holding the lock of rf.mu
