@@ -622,23 +622,6 @@ func (rf *Raft) updateCommitIndex() {
 			break
 		}
 	}
-
-
-	//for i := rf.commitIndex + 1; i < len(rf.log); i++ {
-	//	count := 1  // leader itself has the log for sure
-	//	for p := 0; p < len(rf.peers); p++ {
-	//		if p != rf.me {
-	//			if rf.matchIndex[p] >= i {
-	//				count++
-	//			}
-	//		}
-	//	}
-	//	if rf.hasMajority(count) && {
-	//		rf.commitIndex = i
-	//	} else {
-	//		return
-	//	}
-	//}
 }
 
 func (rf *Raft) applyMsg() {
