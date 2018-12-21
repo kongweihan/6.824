@@ -1,13 +1,18 @@
 package raftkv
 
-import "labrpc"
+import (
+	"fmt"
+	"labrpc"
+	"log"
+)
 import "crypto/rand"
 import "math/big"
 
-
 type Clerk struct {
 	servers []*labrpc.ClientEnd
-	// You will have to modify this struct.
+	clientId int64
+	leaderId int
+	requestId int
 }
 
 func nrand() int64 {
@@ -21,7 +26,15 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	ck.clientId = nrand()
 	return ck
+}
+
+func (ck *Clerk) debug(format string, a ...interface{}) {
+	if DebugClient > 0 {
+		prefix := fmt.Sprintf(" --- Clerk %v --- ", ck.clientId)
+		log.Printf(prefix+format, a...)
+	}
 }
 
 //
@@ -37,9 +50,29 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
+	ck.requestId++
+	args := GetArgs{Key: key, ClientId: ck.clientId, RequestId: ck.requestId}
+	for {
+		reply := GetReply{}
+		ck.debug("Get leader:%v send args:%v\n", ck.leaderId, args)
+		ok := ck.servers[ck.leaderId].Call("KVServer.Get", &args, &reply)
+		if ok {
+			if reply.WrongLeader || reply.Err != "" {
+				ck.debug("Get leader:%v fail args:%v wrongLeader:%v\n", ck.leaderId, args, reply.WrongLeader)
+				ck.nextLeader()
+			} else {
+				ck.debug("Get leader:%v success args:%v\n", ck.leaderId, args)
+				return reply.Value
+			}
+		} else {
+			ck.debug("Get leader:%v RPC lost args:%v\n", ck.leaderId, args)
+			ck.nextLeader()
+		}
+	}
+}
 
-	// You will have to modify this function.
-	return ""
+func (ck *Clerk) nextLeader() {
+	ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
 }
 
 //
@@ -53,7 +86,25 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// You will have to modify this function.
+	ck.requestId++
+	args := PutAppendArgs{Key: key, Value: value, Op: op, ClientId: ck.clientId, RequestId: ck.requestId}
+	for {
+		reply := PutAppendReply{}
+		ck.debug("Get leader:%v send args:%v\n", ck.leaderId, args)
+		ok := ck.servers[ck.leaderId].Call("KVServer.PutAppend", &args, &reply)
+		if ok {
+			if reply.WrongLeader || reply.Err != "" {
+				ck.debug("PutAppend leader:%v fail args:%v wrongleader:%v\n", ck.leaderId, args, reply.WrongLeader)
+				ck.nextLeader()
+			} else {
+				ck.debug("PutAppend leader:%v success args:%v\n", ck.leaderId, args)
+				return
+			}
+		} else {
+			ck.debug("PutAppend leader:%v RPC lost args:%v\n", ck.leaderId, args)
+			ck.nextLeader()
+		}
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {

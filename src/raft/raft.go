@@ -95,6 +95,12 @@ type Entry struct {
 	Term int
 }
 
+const (
+	TimeoutLower int = 500
+	TimeoutUpper int = 2000
+	HeartbeatSleep time.Duration = 150
+)
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
@@ -260,7 +266,7 @@ func (rf *Raft) logIsLatest(term int, index int) bool {
 
 // Assume holding the lock of rf.mu
 func (rf *Raft) resetTimeout() {
-	rf.timeout = time.Now().Add(time.Duration(500 + rand.Intn(1500)) * time.Millisecond)
+	rf.timeout = time.Now().Add(time.Duration(TimeoutLower + rand.Intn(TimeoutUpper - TimeoutLower)) * time.Millisecond)
 }
 
 //
@@ -497,7 +503,7 @@ func (rf *Raft) heartbeat() {
 			rf.sendHeartbeat()
 		}
 		rf.mu.Unlock()
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(HeartbeatSleep * time.Millisecond)
 	}
 }
 
@@ -558,7 +564,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			reply.Success = false
 		} else {
 			// only truncate the part on which follower and leader is different, or if all known parts are the same, truncate only if the leader's log in the RPC is longer than the follower(it's possible that follower receive old RPC from leader with valid but shorter entries)
-			if rf.ifAnyDifferent(args.PrevLogIndex, args.Entries) || args.PrevLogIndex + len(args.Entries) + 1 > len(rf.log) {
+			if rf.ifAnyDifferent(args.PrevLogIndex + 1, args.Entries) || args.PrevLogIndex + len(args.Entries) + 1 > len(rf.log) {
 				rf.debug("AppendEntries ack Leader:%v, log ok up to %v  lastLogIndex:%v  append Entries:%v\n", args.LeaderId, args.PrevLogIndex, rf.lastLogIndex(), args.Entries)
 				rf.log = rf.log[:args.PrevLogIndex + 1]
 				rf.log = append(rf.log, args.Entries...)
@@ -705,16 +711,14 @@ func (rf *Raft) updateCommitIndex() {
 func (rf *Raft) applyMsg() {
 	for {
 		var lastApplied int
-		//var commitIndex int
 		var command interface{}
 
 		rf.mu.Lock()
 		if rf.lastApplied < rf.commitIndex {
 			rf.lastApplied++
 			lastApplied = rf.lastApplied
+			rf.debug("ApplyMsg  lastLogIndex:%v  applyingIndex:%v  commitIndex:%v\n", rf.lastLogIndex(), lastApplied, rf.commitIndex)
 			command = rf.log[rf.lastApplied].Command
-			rf.debug("ApplyMsg  command:%v  lastLogIndex:%v  index:%v  commitIndex:%v\n", command, rf.lastLogIndex(), rf.lastApplied, rf.commitIndex)
-			//commitIndex = rf.commitIndex
 		}
 		rf.mu.Unlock()
 
