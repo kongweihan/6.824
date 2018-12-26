@@ -1,6 +1,7 @@
 package raftkv
 
 import (
+	"bytes"
 	"fmt"
 	"labgob"
 	"labrpc"
@@ -10,15 +11,27 @@ import (
 	"time"
 )
 
-const DebugServer = 0
-const DebugClient = 0
+const Debug = 0
+const Print = 0
 
 func (kv *KVServer) debug(format string, a ...interface{}) {
-	if DebugServer > 0 {
-		if !kv.killed {
-			prefix := fmt.Sprintf(" --- KVServer %v --- ", kv.me)
-			log.Printf(prefix+format, a...)
+	if Debug > 0 && !kv.killed {
+		kv.print(format, a...)
+	}
+}
+
+func (kv *KVServer) debugLeader(format string, a ...interface{}) {
+	if Debug > 0 && !kv.killed {
+		if _, isLeader := kv.rf.GetState(); isLeader {
+			kv.print(format, a...)
 		}
+	}
+}
+
+func (kv *KVServer) print(format string, a ...interface{}) {
+	if Print > 0 && !kv.killed {
+		prefix := fmt.Sprintf(" --- KVServer %2v --- ", kv.me)
+		log.Printf(prefix+format, a...)
 	}
 }
 
@@ -67,54 +80,22 @@ type KVServer struct {
 	lastApplied int
 	killed bool
 
-	lastRequest map[int64]int
-	lastGetValue map[int64]string
+	lastRequest      map[int64]int
+	lastRequestValue map[int64]string
+
+	persister *raft.Persister
 }
 
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+func (kv *KVServer) Get(args *GetArgs, reply *GetPutAppendReply) {
 	// Your code here.
 	op := Op{Action: GetOp, Key: args.Key, ClientId: args.ClientId, RequestId: args.RequestId}
 
-	kv.mu.Lock()
-	index, term, isLeader := kv.rf.Start(op)
-	if !isLeader {
-		reply.WrongLeader = true
-		kv.mu.Unlock()
-		return
-	}
-	kv.debug("%v\tKey: %v\tstart\tindex: %v\tValue: %v\tclient: %v\trequest: %v\n", op.action(), op.Key, index, op.Value, op.ClientId, op.RequestId)
-	kv.mu.Unlock()
-
-	ok := kv.receive(index, term)
-
-	kv.mu.Lock()
-	if ok {
-		if v, present := kv.lastRequest[op.ClientId]; present && op.RequestId == v {
-			kv.debug("%v\tsuccess\tKey: %v\tindex: %v\tValue: %v\tclient: %v\trequest: %v\tlastApplied: %v\n", op.action(), op.Key, index, op.Value, op.ClientId, op.RequestId, kv.lastApplied)
-			reply.Value = kv.lastGetValue[op.ClientId]
-		} else {
-			kv.debug("%v\tfail\tKey: %v\tindex: %v\tValue: %v\tclient: %v\trequest: %v\tlastApplied: %v\n", op.action(), op.Key, index, op.Value, op.ClientId, op.RequestId, kv.lastApplied)
-			reply.Err = "fail"
-		}
-	} else {
-		kv.debug("%v\tKey:%v term changed\tindex: %v\tValue: %v\tclient: %v\trequest: %v\n", op.action(), op.Key, index, op.Value, op.ClientId, op.RequestId)
-		reply.Err = "fail"
-	}
-	kv.mu.Unlock()
+	kv.processGetPutAppend(op, reply)
 }
 
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *GetPutAppendReply) {
 	// Your code here.
-	// No need to PutAppend the same finished request again
-	kv.mu.Lock()
-	if kv.lastRequest[args.ClientId] == args.RequestId {
-		kv.debug("PutAppend\tduplicate client: %v request: %v\n", args.ClientId, args.RequestId)
-		kv.mu.Unlock()
-		return
-	}
-	kv.mu.Unlock()
-
 	var op Op
 	if args.Op == "Put" {
 		op = Op{Action: PutOp, Key: args.Key, Value: args.Value, ClientId: args.ClientId, RequestId: args.RequestId}
@@ -122,6 +103,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		op = Op{Action: AppendOp, Key: args.Key, Value: args.Value, ClientId: args.ClientId, RequestId: args.RequestId}
 	}
 
+	kv.processGetPutAppend(op, reply)
+}
+
+func (kv *KVServer) processGetPutAppend(op Op, reply *GetPutAppendReply) {
 	kv.mu.Lock()
 	index, term, isLeader := kv.rf.Start(op)
 	if !isLeader {
@@ -129,22 +114,23 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.mu.Unlock()
 		return
 	}
-	kv.debug("%v\tKey: %v\tstart\tindex: %v\tValue: %v\tclient: %v\trequest: %v\n", op.action(), op.Key, index, op.Value, op.ClientId, op.RequestId)
+	kv.debug("%-9v for  %2v start    Key:%4v RequestId:%4v Index:%4v Term:%3v\n", op.action(), op.ClientId, op.Key, op.RequestId, index, term)
 	kv.mu.Unlock()
 
 	ok := kv.receive(index, term)
 
 	kv.mu.Lock()
 	if ok {
-		if v, present := kv.lastRequest[op.ClientId]; present && op.RequestId == v {
-			kv.debug("%v\tsuccess\tKey: %v\tindex: %v\tValue: %v\tclient: %v\trequest: %v\tlastApplied: %v\n", op.action(), op.Key, index, op.Value, op.ClientId, op.RequestId, kv.lastApplied)
+		if requestId, present := kv.lastRequest[op.ClientId]; present && requestId == op.RequestId {
+			reply.Value = kv.lastRequestValue[op.ClientId]
+			kv.debug("%-9v for  %2v success  Key:%4v RequestId:%4v Index:%4v LastApplied:%4v Value:%v Result Value:%v\n", op.action(), op.ClientId, op.Key, op.RequestId, index, kv.lastApplied, op.Value, reply.Value)
 		} else {
-			kv.debug("%v\tfail\tKey: %v\tindex: %v\tValue: %v\tclient: %v\trequest: %v\tlastApplied: %v\n", op.action(), op.Key, index, op.Value, op.ClientId, op.RequestId, kv.lastApplied)
-			reply.Err = "fail"
+			reply.Err = "fail or old duplicate request"
+			kv.debug("%-9v for  %2v fail     Key:%4v RequestId:%4v Index:%4v LastApplied:%4v\n", op.action(), op.ClientId, op.Key, op.RequestId, index, kv.lastApplied)
 		}
 	} else {
-		kv.debug("%v\tKey:%v term changed\tindex: %v\tValue: %v\tclient: %v\trequest: %v\n", op.action(), op.Key, index, op.Value, op.ClientId, op.RequestId)
-		reply.Err = "fail"
+		kv.debug("%-9v for  %2v term chg Key:%4v RequestId:%4v Index:%4v LastApplied:%4v\n", op.action(), op.ClientId, op.Key, op.RequestId, index, kv.lastApplied)
+		reply.Err = "term changed"
 	}
 	kv.mu.Unlock()
 }
@@ -171,20 +157,22 @@ func (kv *KVServer) apply() {
 
 		kv.mu.Lock()
 
-		op, ok := cmd.Command.(Op)
-		if ok {
-			if !cmd.CommandValid {
-				// TODO
+		if cmd.Snapshot != nil {
+			kv.debug("Install snapshot, lastApplied set to %v\n", cmd.CommandIndex)
+			kv.readSnapshot(cmd.Snapshot)
+			kv.lastApplied = cmd.CommandIndex // Used CommandIndex to pass in LastSnapshotIndex
+			// Here we don't need to save snapshot because Raft has already done it in InstallSnapshot()
+		} else {
+			op, ok := cmd.Command.(Op)
+			if !ok {
+				panic("applyCh should always produce Op!")
 			}
-			if _, isLeader := kv.rf.GetState(); isLeader {
-				kv.debug("%v\tapply\tindex: %v\tKey: %v\tValue: %v\tclient: %v\trequest: %v\n", op.action(), cmd.CommandIndex, op.Key, op.Value, op.ClientId, op.RequestId)
-			}
-			if kv.lastRequest[op.ClientId] != op.RequestId {
+			if kv.lastRequest[op.ClientId] < op.RequestId {
 				if op.Action == GetOp {
 					if v, present := kv.m[op.Key]; present {
-						kv.lastGetValue[op.ClientId] = v
+						kv.lastRequestValue[op.ClientId] = v
 					} else {
-						kv.lastGetValue[op.ClientId] = ""
+						kv.lastRequestValue[op.ClientId] = ""
 					}
 				} else {
 					if v, present := kv.m[op.Key]; present && op.Action == AppendOp {
@@ -192,12 +180,20 @@ func (kv *KVServer) apply() {
 					} else {
 						kv.m[op.Key] = op.Value
 					}
+					kv.lastRequestValue[op.ClientId] = kv.m[op.Key]
 				}
+				kv.debugLeader("%-9v for  %2v apply    Key:%4v RequestId:%4v Index:%4v Value:%v  LastRequestId:%v  \n", op.action(), op.ClientId, op.Key, op.RequestId, cmd.CommandIndex, kv.lastRequestValue[op.ClientId], kv.lastRequest[op.ClientId])
+				kv.lastRequest[op.ClientId] = op.RequestId
+			} else if kv.lastRequest[op.ClientId] > op.RequestId {
+				panic("New RequestId should always > old RequestId")
+			} else {
+				kv.debugLeader("%-9v for  %2v applydup Key:%4v RequestId:%4v Index:%4v Value:%v  LastRequestId:%v  \n", op.action(), op.ClientId, op.Key, op.RequestId, cmd.CommandIndex, kv.lastRequestValue[op.ClientId], kv.lastRequest[op.ClientId])
 			}
-			kv.lastRequest[op.ClientId] = op.RequestId
 			kv.lastApplied = cmd.CommandIndex
-		} else {
-			panic("applyCh should always produce Op!")
+
+			if kv.maxraftstate != -1 && kv.persister.RaftStateSize() > kv.maxraftstate {
+				kv.saveSnapshot()
+			}
 		}
 
 		kv.mu.Unlock()
@@ -240,16 +236,75 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
+	kv.persister = persister
 
 	// You may need initialization code here.
+	kv.print("StartKVServer, reading snapshot\n")
+	kv.readSnapshot(persister.ReadSnapshot())
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
-	kv.m = make(map[string]string)
-	kv.lastRequest = make(map[int64]int)
-	kv.lastGetValue = make(map[int64]string)
 	go kv.apply()
 	return kv
+}
+
+// Assume holding the lock of kv.mu
+func (kv *KVServer) saveSnapshot() {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.m)
+	e.Encode(kv.lastRequest)
+	e.Encode(kv.lastRequestValue)
+	kv.rf.Snapshot(w.Bytes(), kv.lastApplied)
+	kv.print("Saved snapshot\n\t\tk/v:\n%v\n\t\tlastRequest:\n%v\n\t\t lastRequestValue:\n%v\n", mapToString1(kv.m), mapToString2(kv.lastRequest), mapToString3(kv.lastRequestValue))
+}
+
+// Assume holding the lock of kv.mu
+func (kv *KVServer) readSnapshot(data []byte) {
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		kv.m = make(map[string]string)
+		kv.lastRequest = make(map[int64]int)
+		kv.lastRequestValue = make(map[int64]string)
+		return
+	}
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var m map[string]string
+	var lastRequest map[int64]int
+	var lastRequestValue map[int64]string
+	if d.Decode(&m) != nil || d.Decode(&lastRequest) != nil || d.Decode(&lastRequestValue) != nil {
+		panic("readSnapshot: error decode\n")
+	} else {
+		kv.m = m
+		kv.lastRequest = lastRequest
+		kv.lastRequestValue = lastRequestValue
+	}
+	kv.print("Read snapshot\n\t\tk/v:\n%v\n\t\tlastRequest:\n%v\n\t\t lastRequestValue:\n%v\n", mapToString1(kv.m), mapToString2(kv.lastRequest), mapToString3(kv.lastRequestValue))
+}
+
+func mapToString1(m map[string]string) string {
+	var ret string
+	for k, v := range m {
+		ret += fmt.Sprintf("\t\t%3v: %v", k, v) + "\n"
+	}
+	return ret
+}
+
+func mapToString2(m map[int64]int) string {
+	var ret string
+	for k, v := range m {
+		ret += fmt.Sprintf("\t\t%3v: %v", k, v) + "\n"
+	}
+	return ret
+}
+
+func mapToString3(m map[int64]string) string {
+	var ret string
+	for k, v := range m {
+		ret += fmt.Sprintf("\t\t%3v: %v", k, v) + "\n"
+	}
+	return ret
 }

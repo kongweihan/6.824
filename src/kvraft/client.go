@@ -12,7 +12,7 @@ type Clerk struct {
 	servers []*labrpc.ClientEnd
 	clientId int64
 	leaderId int
-	requestId int
+	requestId int  // Will start at 1, initial lastRequest[clientId] will be 0
 }
 
 func nrand() int64 {
@@ -31,8 +31,8 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 }
 
 func (ck *Clerk) debug(format string, a ...interface{}) {
-	if DebugClient > 0 {
-		prefix := fmt.Sprintf(" --- Clerk %v --- ", ck.clientId)
+	if Debug > 0 {
+		prefix := fmt.Sprintf(" --- Clerk    %2v --- ", ck.clientId)
 		log.Printf(prefix+format, a...)
 	}
 }
@@ -53,21 +53,22 @@ func (ck *Clerk) Get(key string) string {
 	ck.requestId++
 	args := GetArgs{Key: key, ClientId: ck.clientId, RequestId: ck.requestId}
 	for {
-		reply := GetReply{}
-		ck.debug("Get leader:%v send args:%v\n", ck.leaderId, args)
+		reply := GetPutAppendReply{}
+		ck.debug("Get       to   %2v send     Key:%4v RequestId:%4v\n", ck.leaderId, args.Key, args.RequestId)
 		ok := ck.servers[ck.leaderId].Call("KVServer.Get", &args, &reply)
 		if ok {
-			if reply.WrongLeader || reply.Err != "" {
-				ck.debug("Get leader:%v fail args:%v wrongLeader:%v\n", ck.leaderId, args, reply.WrongLeader)
-				ck.nextLeader()
+			if reply.WrongLeader {
+				ck.debug("Get       from %2v wrong    Key:%4v RequestId:%4v\n", ck.leaderId, args.Key, args.RequestId)
+			} else if reply.Err != "" {
+				ck.debug("Get       from %2v fail     Key:%4v RequestId:%4v\n", ck.leaderId, args.Key, args.RequestId)
 			} else {
-				ck.debug("Get leader:%v success args:%v\n", ck.leaderId, args)
+				ck.debug("Get       from %2v success  Key:%4v RequestId:%4v value: %v\n", ck.leaderId, args.Key, args.RequestId, reply.Value)
 				return reply.Value
 			}
 		} else {
-			ck.debug("Get leader:%v RPC lost args:%v\n", ck.leaderId, args)
-			ck.nextLeader()
+			ck.debug("Get       from %2v RPC lost Key:%4v RequestId:%4v\n", ck.leaderId, args.Key, args.RequestId)
 		}
+		ck.nextLeader()
 	}
 }
 
@@ -89,21 +90,22 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	ck.requestId++
 	args := PutAppendArgs{Key: key, Value: value, Op: op, ClientId: ck.clientId, RequestId: ck.requestId}
 	for {
-		reply := PutAppendReply{}
-		ck.debug("Get leader:%v send args:%v\n", ck.leaderId, args)
+		reply := GetPutAppendReply{}
+		ck.debug("PutAppend to   %2v send     Key:%4v RequestId:%4v Value: %v\n", ck.leaderId, args.Key, args.RequestId, args.Value)
 		ok := ck.servers[ck.leaderId].Call("KVServer.PutAppend", &args, &reply)
 		if ok {
-			if reply.WrongLeader || reply.Err != "" {
-				ck.debug("PutAppend leader:%v fail args:%v wrongleader:%v\n", ck.leaderId, args, reply.WrongLeader)
-				ck.nextLeader()
+			if reply.WrongLeader {
+				ck.debug("PutAppend from %2v wrong    Key:%4v RequestId:%4v\n", ck.leaderId, args.Key, args.RequestId)
+			} else if reply.Err != "" {
+				ck.debug("PutAppend from %2v fail     Key:%4v RequestId:%4v Value: %v\n", ck.leaderId, args.Key, args.RequestId, args.Value)
 			} else {
-				ck.debug("PutAppend leader:%v success args:%v\n", ck.leaderId, args)
+				ck.debug("PutAppend from %2v success  Key:%4v RequestId:%4v Value: %v Result Value: %v\n", ck.leaderId, args.Key, args.RequestId, args.Value, reply.Value)
 				return
 			}
 		} else {
-			ck.debug("PutAppend leader:%v RPC lost args:%v\n", ck.leaderId, args)
-			ck.nextLeader()
+			ck.debug("PutAppend from %2v RPC lost Key:%4v RequestId:%4v Value: %v\n", ck.leaderId, args.Key, args.RequestId, args.Value)
 		}
+		ck.nextLeader()
 	}
 }
 

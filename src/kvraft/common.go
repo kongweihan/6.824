@@ -19,9 +19,10 @@ type PutAppendArgs struct {
 	RequestId int
 }
 
-type PutAppendReply struct {
+type GetPutAppendReply struct {
 	WrongLeader bool
 	Err         Err
+	Value		string
 }
 
 type GetArgs struct {
@@ -29,10 +30,4 @@ type GetArgs struct {
 	// You'll have to add definitions here.
 	ClientId int64
 	RequestId int
-}
-
-type GetReply struct {
-	WrongLeader bool
-	Err         Err
-	Value       string
 }
