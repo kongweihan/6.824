@@ -1,5 +1,10 @@
 package shardmaster
 
+import (
+	"hash/fnv"
+	"strconv"
+)
+
 //
 // Master shard server: assigns shards to replication groups.
 //
@@ -36,38 +41,86 @@ type Err string
 
 type JoinArgs struct {
 	Servers map[int][]string // new GID -> servers mappings
+	ClientId int64
+	RequestId int
 }
 
-type JoinReply struct {
-	WrongLeader bool
-	Err         Err
-}
+//type JoinReply struct {
+//	WrongLeader bool
+//	Err         Err
+//}
 
 type LeaveArgs struct {
 	GIDs []int
+	ClientId int64
+	RequestId int
 }
 
-type LeaveReply struct {
-	WrongLeader bool
-	Err         Err
-}
+//type LeaveReply struct {
+//	WrongLeader bool
+//	Err         Err
+//}
 
 type MoveArgs struct {
 	Shard int
 	GID   int
+	ClientId int64
+	RequestId int
 }
 
-type MoveReply struct {
-	WrongLeader bool
-	Err         Err
-}
+//type MoveReply struct {
+//	WrongLeader bool
+//	Err         Err
+//}
 
 type QueryArgs struct {
 	Num int // desired config number
+	ClientId int64
+	RequestId int
 }
 
-type QueryReply struct {
+//type QueryReply struct {
+//	WrongLeader bool
+//	Err         Err
+//	Config      Config
+//}
+
+type ShardMasterReply struct {
 	WrongLeader bool
 	Err         Err
 	Config      Config
+}
+
+func (cf *Config) getGIDs() []int {
+	var GIDs []int
+	for gid := range cf.Groups {
+		GIDs = append(GIDs, gid)
+	}
+	return GIDs
+}
+
+func groupHash(gid int) int {
+	st := strconv.Itoa(gid)
+	h := fnv.New32a()
+	h.Write([]byte(st))
+	return int(h.Sum32() % NShards)
+}
+
+type GroupHash struct {
+	GID int
+	Hash int
+}
+
+type ByHash []GroupHash
+
+func (s ByHash) Len() int {
+	return len(s)
+}
+
+func (s ByHash) Swap(i, j int) {
+	s[i], s[j] = s[j], s[i]
+}
+
+func (s ByHash) Less(i, j int) bool {
+	return s[i].Hash < s[j].Hash
 }
