@@ -26,20 +26,25 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientId int64
+	RequestId int
 }
 
-type PutAppendReply struct {
+type GetPutAppendReply struct {
 	WrongLeader bool
 	Err         Err
+	Value		string
 }
 
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
+	ClientId int64
+	RequestId int
 }
 
-type GetReply struct {
-	WrongLeader bool
-	Err         Err
-	Value       string
-}
+//type GetReply struct {
+//	WrongLeader bool
+//	Err         Err
+//	Value       string
+//}

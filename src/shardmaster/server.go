@@ -13,6 +13,14 @@ import "labgob"
 
 const Debug = 0
 
+func (sm *ShardMaster) debugLeader(format string, a ...interface{}) {
+	if Debug > 0 && !sm.killed {
+		if _, isLeader := sm.rf.GetState(); isLeader {
+			sm.debug(format, a...)
+		}
+	}
+}
+
 func (sm *ShardMaster) debug(format string, a ...interface{}) {
 	if Debug > 0 && !sm.killed {
 		prefix := fmt.Sprintf(" --- SM %2v --- ", sm.me)
@@ -76,18 +84,21 @@ func (op *Op) action() string {
 func (sm *ShardMaster) Join(args *JoinArgs, reply *ShardMasterReply) {
 	// Your code here.
 	op := Op{Action: Join, Servers: args.Servers, ClientId: args.ClientId, RequestId: args.RequestId}
+	sm.debugLeader("%-9v for  %2v start    RequestId:%4v\n", op.action(), op.ClientId, op.RequestId)
 	sm.processOp(op, reply)
 }
 
 func (sm *ShardMaster) Leave(args *LeaveArgs, reply *ShardMasterReply) {
 	// Your code here.
 	op := Op{Action: Leave, GIDs: args.GIDs, ClientId: args.ClientId, RequestId: args.RequestId}
+	sm.debugLeader("%-9v for  %2v start    RequestId:%4v\n", op.action(), op.ClientId, op.RequestId)
 	sm.processOp(op, reply)
 }
 
 func (sm *ShardMaster) Move(args *MoveArgs, reply *ShardMasterReply) {
 	// Your code here.
 	op := Op{Action: Move, Shard: args.Shard, GID: args.GID, ClientId: args.ClientId, RequestId: args.RequestId}
+	sm.debugLeader("%-9v for  %2v start    RequestId:%4v\n", op.action(), op.ClientId, op.RequestId)
 	sm.processOp(op, reply)
 }
 
@@ -105,7 +116,6 @@ func (sm *ShardMaster) processOp(op Op, reply *ShardMasterReply) {
 		sm.mu.Unlock()
 		return
 	}
-	sm.debug("%-9v for  %2v start    RequestId:%4v\n", op.action(), op.ClientId, op.RequestId)
 	sm.mu.Unlock()
 
 	ok := sm.receive(index, term)
@@ -115,9 +125,9 @@ func (sm *ShardMaster) processOp(op Op, reply *ShardMasterReply) {
 		if requestId, present := sm.lastRequest[op.ClientId]; present && requestId == op.RequestId {
 			if op.Action == Query {
 				reply.Config = sm.configs[sm.lastRequestConfigId[op.ClientId]]
-				sm.debug("Query config %v\n", reply.Config)
+				//sm.debug("Query config %v\n", reply.Config)
 			}
-			sm.debug("%-9v for  %2v return   RequestId:%4v\n", op.action(), op.ClientId, op.RequestId)
+			//sm.debug("%-9v for  %2v return   RequestId:%4v\n", op.action(), op.ClientId, op.RequestId)
 		} else {
 			reply.Err = "fail or old duplicate request"
 		}
@@ -150,7 +160,7 @@ func (sm *ShardMaster) apply() {
 		sm.mu.Lock()
 
 		op, ok := cmd.Command.(Op)
-		sm.debug("apply op %v\n", op)
+		//sm.debug("apply op %v\n", op)
 		if !ok {
 			panic("applyCh should always produce Op!")
 		}
@@ -202,7 +212,7 @@ func (sm *ShardMaster) join(m map[int][]string) {
 	}
 
 	config := Config{Num: len(sm.configs), Shards: generateShards(GIDs), Groups: groups}
-	sm.debug("New Join config: %v\n", config)
+	sm.debugLeader("New Join config: %v\n", config)
 	sm.configs = append(sm.configs, config)
 }
 
@@ -230,7 +240,7 @@ func (sm *ShardMaster) leave(leavingGIDs []int) {
 	}
 
 	config := Config{Num: len(sm.configs), Shards: generateShards(GIDs), Groups: groups}
-	sm.debug("New Leave config: %v\n", config)
+	sm.debugLeader("New Leave config: %v\n", config)
 	sm.configs = append(sm.configs, config)
 }
 
@@ -249,7 +259,7 @@ func (sm *ShardMaster) move(shard int, gid int) {
 	shards[shard] = gid
 
 	config := Config{Num: len(sm.configs), Shards: shards, Groups: groups}
-	sm.debug("New Move config: %v\n", config)
+	sm.debugLeader("New Move config: %v\n", config)
 	sm.configs = append(sm.configs, config)
 }
 
@@ -362,5 +372,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sm.lastRequest = make(map[int64]int)
 	sm.lastRequestConfigId = make(map[int64]int)
 	go sm.apply()
+
+	sm.debug("Start ShardMaster server\n")
 	return sm
 }
