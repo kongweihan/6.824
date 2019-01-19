@@ -81,7 +81,6 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 //
 func (ck *Clerk) Get(key string) string {
 	ck.requestId++
-	ck.debug("request %v\n", ck.requestId)
 	args := GetArgs{Key: key, ClientId: ck.clientId, RequestId: ck.requestId}
 	for {
 		shard := key2shard(key)
@@ -116,7 +115,6 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	ck.requestId++
-	ck.debug("request %v\n", ck.requestId)
 	args := PutAppendArgs{Key: key, Value: value, Op: op, ClientId: ck.clientId, RequestId: ck.requestId}
 
 	for {

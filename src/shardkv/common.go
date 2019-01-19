@@ -13,6 +13,7 @@ const (
 	OK            = "OK"
 	ErrNoKey      = "ErrNoKey"
 	ErrWrongGroup = "ErrWrongGroup"
+	NotInstallYet = "NotInstallYet"
 )
 
 type Err string

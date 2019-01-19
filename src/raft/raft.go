@@ -247,16 +247,22 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.mu.Unlock()
 }
 
-func (rf *Raft) Snapshot(snapshot []byte, lastSnapshotIndex int) {
+func (rf *Raft) Snapshot(snapshot []byte, lastApplied int) {
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-	rf.debug("Compact log lastLogIndex: %v LastSnapshotIndex: %v\n", rf.log.lastLogIndex(), lastSnapshotIndex)
-	rf.log.compactUpTo(lastSnapshotIndex)
+    if rf.log.LastSnapshotIndex >= lastApplied {
+        // This happens when the KV server wants to take a snapshot, but just before this happen, Raft received
+        // InstallSnapshot RPC to wipe out the current log and trying to install snapshot, yet the installation
+        // has not reach KV server via ApplyMsg channel
+        rf.debug("Detect newer snapshot, skip taking current snapshot  current lastSnapshotIndex:%v  lastApplied:%v\n", rf.log.LastSnapshotIndex, lastApplied)
+        return
+    }
+	rf.debug("Compact log lastLogIndex: %v current lastSnapshotIndex:%v  lastApplied: %v\n", rf.log.lastLogIndex(), rf.log.LastSnapshotIndex, lastApplied)
+	rf.log.compactUpTo(lastApplied)
 	rf.persister.SaveStateAndSnapshot(rf.encodeState(), snapshot)
 	rf.debug("Saved snapshot(%v) and state(%v)\n", rf.persister.SnapshotSize(), rf.persister.RaftStateSize())
 	rf.print("Saved Raft state: term:%v vote:%v log:\n%v\n", rf.currentTerm, rf.votedFor, rf.log.toString())
-
-	rf.mu.Unlock()
 }
 
 //
@@ -589,7 +595,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// PrevLogIndex             ^
 		// FirstIndex		    ^
 		// New nextIndex		^
-		rf.debug("AppendEntries ack Leader:%v, log inconsistent index:%v term:%v leader term:%v  lastLogIndex:%v\n", args.LeaderId, args.PrevLogIndex, rf.log.get(args.PrevLogIndex).Term, args.PrevLogTerm, rf.log.lastLogIndex())
+		rf.debug("AppendEntries ack Leader:%v, log inconsistent index:%v term:%v leader term:%v  lastLogIndex:%v\n", args.LeaderId, args.PrevLogIndex, rf.log.getTerm(args.PrevLogIndex), args.PrevLogTerm, rf.log.lastLogIndex())
 		reply.ConflictTerm = rf.log.getTerm(args.PrevLogIndex)
 		// If snapshot contains any entry of conflict term, that means leader has this term in log,
 		// and will ignore reply.FirstIndex, so we can leave reply.FirstIndex as -1
@@ -723,7 +729,7 @@ func (rf *Raft) sendAppendEntriesOrInstallSnapshot(server int) {
 // Assume holding the lock of rf.mu
 func (rf *Raft) updateCommitIndex() {
 	for i := rf.log.lastLogIndex(); i > rf.commitIndex; i-- {
-		if rf.log.get(i).Term == rf.currentTerm {
+		if rf.log.getTerm(i) == rf.currentTerm {
 			count := 1  // leader itself has the log for sure
 			for p := 0; p < len(rf.peers); p++ {
 				if p != rf.me {

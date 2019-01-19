@@ -84,21 +84,21 @@ func (op *Op) action() string {
 func (sm *ShardMaster) Join(args *JoinArgs, reply *ShardMasterReply) {
 	// Your code here.
 	op := Op{Action: Join, Servers: args.Servers, ClientId: args.ClientId, RequestId: args.RequestId}
-	sm.debugLeader("%-9v for  %2v start    RequestId:%4v\n", op.action(), op.ClientId, op.RequestId)
+	sm.debugLeader("%-9v for  %4v start    RequestId:%4v\n", op.action(), op.ClientId % 10000, op.RequestId)
 	sm.processOp(op, reply)
 }
 
 func (sm *ShardMaster) Leave(args *LeaveArgs, reply *ShardMasterReply) {
 	// Your code here.
 	op := Op{Action: Leave, GIDs: args.GIDs, ClientId: args.ClientId, RequestId: args.RequestId}
-	sm.debugLeader("%-9v for  %2v start    RequestId:%4v\n", op.action(), op.ClientId, op.RequestId)
+	sm.debugLeader("%-9v for  %4v start    RequestId:%4v GIDs:%v\n", op.action(), op.ClientId % 10000, op.RequestId, op.GIDs)
 	sm.processOp(op, reply)
 }
 
 func (sm *ShardMaster) Move(args *MoveArgs, reply *ShardMasterReply) {
 	// Your code here.
 	op := Op{Action: Move, Shard: args.Shard, GID: args.GID, ClientId: args.ClientId, RequestId: args.RequestId}
-	sm.debugLeader("%-9v for  %2v start    RequestId:%4v\n", op.action(), op.ClientId, op.RequestId)
+	sm.debugLeader("%-9v for  %4v start    RequestId:%4v GID:%v\n", op.action(), op.ClientId % 10000, op.RequestId, op.GID)
 	sm.processOp(op, reply)
 }
 
